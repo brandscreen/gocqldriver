@@ -328,11 +328,11 @@ func (cn *connection) recycleErr() error {
 	if cn.recycle.IsZero() {
 		return nil
 	}
-	if !time.Now().Before(cn.recycle) {
-		cn.close()
-		return driver.ErrBadConn
+	if time.Now().Before(cn.recycle) {
+		return nil
 	}
-	return nil
+	cn.close()
+	return driver.ErrBadConn
 }
 
 func (cn *connection) Prepare(query string) (driver.Stmt, error) {
