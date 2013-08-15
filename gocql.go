@@ -93,7 +93,7 @@ func getConn(addrs []string) (conn net.Conn, err error) {
 }
 
 func parseConsistency(cs string) (byte, error) {
-	if b, ok := consistencyLevels[cs]; ok {
+	if b, ok := consistencyLevels[strings.ToLower(cs)]; ok {
 		return b, nil
 	}
 	return 0xff, fmt.Errorf("unknown consistency level %q", cs)
