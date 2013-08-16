@@ -104,8 +104,8 @@ func Open(name string) (cn *connection, err error) {
 
 	version := "3.0.0"
 	cn = &connection{
-		readConsistency:  1,
-		writeConsistency: 1,
+		readConsistency:  consistencyLevels["one"],
+		writeConsistency: consistencyLevels["one"],
 	}
 	var keyspace string
 
