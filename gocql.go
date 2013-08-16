@@ -114,6 +114,9 @@ func Open(name string) (cn *connection, err error) {
 			continue
 		}
 		splitPart := strings.SplitN(part, "=", 2)
+		if len(splitPart) != 2 {
+			return nil, fmt.Errorf("missing = in option: %q", part)
+		}
 		opt, val := splitPart[0], splitPart[1]
 		opt = strings.ToLower(opt)
 		val = strings.TrimSpace(val)
