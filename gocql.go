@@ -38,6 +38,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -59,6 +60,10 @@ const (
 	opExecute      byte = 0x0A
 	opLAST         byte = 0x0A // not a real opcode -- used to check for valid opcodes
 
+	errorOverloaded   = 0x1001
+	errorWriteTimeout = 0x1100
+	errorReadTimeout  = 0x1200
+
 	flagCompressed byte = 0x01
 
 	keyVersion     string = "CQL_VERSION"
@@ -79,6 +84,7 @@ type connection struct {
 	compression                       string
 	readConsistency, writeConsistency byte
 	recycle                           time.Time
+	retries                           int
 }
 
 // dial addresses until we connect
@@ -159,6 +165,12 @@ func Open(name string) (cn *connection, err error) {
 			} else {
 				cn.recycle = time.Time{}
 			}
+		case "retries":
+			i64, err := strconv.ParseInt(val, 0, 0)
+			if err != nil {
+				return nil, fmt.Errorf("bad retries option: %s", err)
+			}
+			cn.retries = int(i64)
 		default:
 			return nil, fmt.Errorf("unsupported option %q", opt)
 		}
@@ -338,6 +350,38 @@ func (cn *connection) recycleErr() error {
 	return driver.ErrBadConn
 }
 
+func retryErr(err error) bool {
+	e, ok := err.(Error)
+	if !ok {
+		return false
+	}
+	switch e.Code {
+	case errorWriteTimeout:
+	case errorReadTimeout:
+	case errorOverloaded:
+	default:
+		return false
+	}
+	return true
+}
+
+func (cn *connection) retrySendRecv(send func() error) (op byte, body []byte, err error) {
+	for try := 0; try <= cn.retries || cn.retries < 0; try++ {
+		err = send()
+		if err != nil {
+			break
+		}
+		op, body, err = cn.recv()
+		if err == nil {
+			break
+		}
+		if !retryErr(err) {
+			break
+		}
+	}
+	return
+}
+
 func (cn *connection) Prepare(query string) (driver.Stmt, error) {
 	if err := cn.recycleErr(); err != nil {
 		return nil, err
@@ -345,10 +389,9 @@ func (cn *connection) Prepare(query string) (driver.Stmt, error) {
 	body := make([]byte, len(query)+4)
 	binary.BigEndian.PutUint32(body[0:4], uint32(len(query)))
 	copy(body[4:], []byte(query))
-	if err := cn.send(opPrepare, body); err != nil {
-		return nil, err
-	}
-	opcode, body, err := cn.recv()
+	opcode, body, err := cn.retrySendRecv(func() error {
+		return cn.send(opPrepare, body)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -439,10 +482,9 @@ func (st *statement) Exec(v []driver.Value) (driver.Result, error) {
 	if err := st.cn.recycleErr(); err != nil {
 		return nil, err
 	}
-	if err := st.exec(v, st.cn.writeConsistency); err != nil {
-		return nil, err
-	}
-	opcode, body, err := st.cn.recv()
+	opcode, body, err := st.cn.retrySendRecv(func() error {
+		return st.exec(v, st.cn.writeConsistency)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -454,10 +496,9 @@ func (st *statement) Query(v []driver.Value) (driver.Rows, error) {
 	if err := st.cn.recycleErr(); err != nil {
 		return nil, err
 	}
-	if err := st.exec(v, st.cn.readConsistency); err != nil {
-		return nil, err
-	}
-	opcode, body, err := st.cn.recv()
+	opcode, body, err := st.cn.retrySendRecv(func() error {
+		return st.exec(v, st.cn.readConsistency)
+	})
 	if err != nil {
 		return nil, err
 	}
